@@ -248,7 +248,7 @@ async function callProvider(s,p){
  if(s.provider==='openai'){r=await fetch((s.baseUrl||PROVIDERS.openai.base)+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.apiKey},body:JSON.stringify({model:s.model,messages:[{role:'system',content:sys},{role:'user',content:usr}]})});d=await r.json();if(!r.ok)throw new Error(d.error?.message||'HTTP '+r.status);return d.choices?.[0]?.message?.content}
  r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':s.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:s.model,max_tokens:4096,system:sys,messages:[{role:'user',content:usr}]})});d=await r.json();if(!r.ok)throw new Error(d.error?.message||'HTTP '+r.status);return d.content?.map(x=>x.text||'').join('')
 }
-async function callWithRetry(s,p){let err;for(let i=0;i<3;i++){try{let t=await callProvider(s,p);if(typeof t!=='string'||!t.trim())throw new Error('Empty translation');return t.trim()}catch(e){err=e;if(aiAbort)break;await new Promise(r=>setTimeout(r,1500*(i+1)))}}throw err}
+async function callWithRetry(s,p){let err;for(let i=0;i<4;i++){try{let t=await callProvider(s,p);if(typeof t!=='string'||!t.trim())throw new Error('Empty translation');return t.trim()}catch(e){err=e;if(aiAbort)break;await new Promise(r=>setTimeout(r,2000*(i+1)))}}throw err}
 async function testAIConnection(){let s=readAIForm(),st=$('aiConnectionStatus');st.textContent='Testing…';st.className='connection-status';try{if(s.provider==='backend'){let r=await fetch(s.endpoint+'/health');if(!r.ok)throw new Error('HTTP '+r.status);st.textContent='Backend reachable.'}else{let t=await callProvider(s,{source_text:'Good morning, how are you?',source_language:'English',target_language:s.target,style:'natural',book_title:'Test',chapter_title:'Test',glossary:[]});st.textContent='Connected ✓  Test: '+t}st.className='connection-status ok'}catch(e){st.textContent='Failed: '+e.message;st.className='connection-status error'}}
 async function aiTranslateChapter(){
  if(!translationData||!translationBookId){toast('Import a book and select a chapter first.');return}
@@ -319,19 +319,26 @@ async function flush(){if(bookJob||!translationData||!translationBookId||!transl
 function aiReady(){let s=aiSettings();if(needsSetup(s)){toast('Set up your AI provider first.');showPage('ai');return null}return s}
 function aiPayload(s,text,chTitle){let b=books.find(x=>x.id===translationBookId);return{source_text:text,source_language:b?.lang||'auto-detect',target_language:s.target||'Vietnamese',style:s.style||'literary',book_title:b?.title||'',chapter_title:chTitle,glossary:s.useGlossary!==false?glossaryTerms().filter(t=>!t.bookId||t.bookId===translationBookId).map(t=>({source:t.source,target:t.target,note:t.note||''})):[]}}
 async function aiTranslateOne(i){let s=aiReady();if(!s||!translationUnits[i])return;collectTranslationInputs();toast(`Translating paragraph ${i+1}…`);try{translationUnits[i].translation=await callWithRetry(s,aiPayload(s,translationUnits[i].source,translationData.chapters[translationChapterIndex].title))}catch(e){toast('Failed: '+e.message);return}renderTranslationUnits();document.getElementById('unit-'+i)?.scrollIntoView({block:'center'});await flush();toast('Paragraph translated.')}
+async function runPool(items,n,fn){let i=0;await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{while(i<items.length&&!aiAbort)await fn(items[i++])}))}
+async function freeBatch(texts,p){let sl=GCODE[p.source_language]||'auto',tl=GCODE[p.target_language]||'vi',r=(await googleFree(texts.map(t=>t.replace(/\s*\n\s*/g,' ')).join('\n'),sl,tl)).split('\n').map(x=>x.trim()).filter(Boolean);if(r.length!==texts.length)throw new Error('batch mismatch');return r}
 async function aiTranslateBook(){
  if(!translationData||!translationBookId){toast('Select an imported book first.');return}let s=aiReady();if(!s)return;await flush();
- let jobs=[];translationData.chapters.forEach((c,ci)=>c.paragraphs.forEach((p,pi)=>{if(s.overwrite||!(translationData.translations?.[ci]?.[pi]||'').trim())jobs.push([ci,pi])}));
+ let jobs=[];translationData.chapters.forEach((c,ci)=>c.paragraphs.forEach((p,pi)=>{if(p.trim()&&(s.overwrite||!(translationData.translations?.[ci]?.[pi]||'').trim()))jobs.push([ci,pi])}));
  if(!jobs.length){toast('Everything is already translated.');return}
- if(!confirm(`Translate ${jobs.length} paragraph(s) with ${s.provider}${s.model?' ('+s.model+')':''}? This uses your API quota. You can stop at any time; progress is saved.`))return;
+ if(!confirm(`Translate ${jobs.length} paragraph(s) with ${s.provider==='free'?'Free Google Translate':s.provider+(s.model?' ('+s.model+')':'')}? You can stop at any time; progress is saved.`))return;
  bookJob=true;aiAbort=false;translationData.translations=translationData.translations||{};
- ['aiTranslateButton','aiBookButton'].forEach(id=>$(id).disabled=true);$('aiStopButton').hidden=false;$('aiProgressWrap').hidden=false;let failed=0,k=0;
- for(;k<jobs.length;k++){if(aiAbort)break;let [ci,pi]=jobs[k];$('aiProgressLabel').textContent=`Chapter ${ci+1}/${translationData.chapters.length} · paragraph ${k+1} of ${jobs.length}`;
-  try{let t=await callWithRetry(s,aiPayload(s,translationData.chapters[ci].paragraphs[pi],translationData.chapters[ci].title));(translationData.translations[ci]=translationData.translations[ci]||[])[pi]=t}catch(e){failed++}
-  let pct=Math.round((k+1)/jobs.length*100);$('aiProgressPercent').textContent=pct+'%';$('aiProgressBar').style.width=pct+'%';if((k+1)%10===0)await persistTranslations()}
+ ['aiTranslateButton','aiBookButton'].forEach(id=>$(id).disabled=true);$('aiStopButton').hidden=false;$('aiProgressWrap').hidden=false;
+ let isFree=s.provider==='free',groups=[],cur=[],len=0,done=0,failed=0,since=0;
+ for(let jb of jobs){let t=translationData.chapters[jb[0]].paragraphs[jb[1]];if(isFree&&cur.length&&(cur[0][0]!==jb[0]||len+t.length>1400||cur.length>=12)){groups.push(cur);cur=[];len=0}cur.push(jb);len+=t.length;if(!isFree){groups.push(cur);cur=[];len=0}}
+ if(cur.length)groups.push(cur);
+ const put=(ci,pi,t)=>{(translationData.translations[ci]=translationData.translations[ci]||[])[pi]=t};
+ await runPool(groups,isFree?6:3,async g=>{let ch=translationData.chapters[g[0][0]],tx=g.map(([ci,pi])=>translationData.chapters[ci].paragraphs[pi]),pl=t=>aiPayload(s,t,ch.title),ok=false;
+  if(g.length>1){try{(await freeBatch(tx,pl(tx[0]))).forEach((t,x)=>put(g[x][0],g[x][1],t));ok=true}catch(e){}}
+  if(!ok)for(let x=0;x<g.length&&!aiAbort;x++){try{put(g[x][0],g[x][1],await callWithRetry(s,pl(tx[x])))}catch(e){failed++}}
+  done+=g.length;let pct=Math.min(100,Math.round(done/jobs.length*100));$('aiProgressLabel').textContent=`${done} of ${jobs.length} paragraphs`;$('aiProgressPercent').textContent=pct+'%';$('aiProgressBar').style.width=pct+'%';if(++since>=5){since=0;await persistTranslations()}});
  await persistTranslations();bookJob=false;inBookLoad=true;loadTranslationChapter(translationChapterIndex);inBookLoad=false;
  ['aiTranslateButton','aiBookButton'].forEach(id=>$(id).disabled=false);$('aiStopButton').hidden=true;
- $('aiProgressLabel').textContent=(aiAbort?'Stopped · ':'Finished · ')+`${k-failed} translated`+(failed?` · ${failed} failed (run again to retry)`:'');toast(aiAbort?'Stopped. Progress saved.':failed?'Done with some failures. Run again to retry.':'Whole book translated and saved.')}
+ $('aiProgressLabel').textContent=(aiAbort?'Stopped · ':'Finished · ')+`${done-failed} translated`+(failed?` · ${failed} failed (run again to retry)`:'');toast(aiAbort?'Stopped. Progress saved.':failed?'Done with some failures. Run again to retry.':'Whole book translated and saved.')}
 const _ltb=loadTranslationBook;loadTranslationBook=async function(id){await flush();inBookLoad=true;try{await _ltb(id)}finally{inBookLoad=false}};
 const _ltc=loadTranslationChapter;loadTranslationChapter=function(i){if(!inBookLoad)flush();_ltc(i)};
 const _rtu=renderTranslationUnits;renderTranslationUnits=function(){_rtu();document.querySelectorAll('#translationUnits .unit-head').forEach((h,i)=>h.insertAdjacentHTML('beforeend',`<button class="icon-btn" onclick="aiTranslateOne(${i})">✧ AI translate</button>`))};
@@ -347,7 +354,7 @@ function chunkText(t,max){let out=[],cur='';for(let s of (t.match(/[^.!?。！�
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function googleFree(text,sl,tl){let r=await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl='+sl+'&tl='+tl,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'q='+encodeURIComponent(text)});if(!r.ok)throw new Error('Google HTTP '+r.status);let d=await r.json();return d[0].map(x=>x[0]||'').join('')}
 async function myMemory(text,sl,tl){let r=await fetch('https://api.mymemory.translated.net/get?q='+encodeURIComponent(text)+'&langpair='+(sl==='auto'?'en':sl)+'|'+tl);let d=await r.json();if(d.responseStatus!=200)throw new Error(d.responseDetails||'MyMemory error');return d.responseData.translatedText}
-async function freeTranslate(p){let sl=GCODE[p.source_language]||'auto',tl=GCODE[p.target_language]||'vi',out=[];for(let c of chunkText(p.source_text,1200)){let t;try{t=await googleFree(c,sl,tl)}catch(e){t=(await Promise.all(chunkText(c,450).map(x=>myMemory(x,sl,tl)))).join(' ')}out.push(t);await sleep(250)}return out.join(' ').replace(/\s+/g,' ').trim()}
+async function freeTranslate(p){let sl=GCODE[p.source_language]||'auto',tl=GCODE[p.target_language]||'vi',out=[];for(let c of chunkText(p.source_text,1200)){let t;try{t=await googleFree(c,sl,tl)}catch(e){t=(await Promise.all(chunkText(c,450).map(x=>myMemory(x,sl,tl)))).join(' ')}out.push(t)}return out.join(' ').replace(/\s+/g,' ').trim()}
 $('aiProvider').insertAdjacentHTML('afterbegin','<option value="free">Free · Google Translate (no key)</option>');
 $('aiDirectBox').insertAdjacentHTML('beforebegin','<div class="file-hint" id="aiFreeHint">Free mode needs no account or key. Quality is “machine-translation” level (good for understanding, less literary), and style and glossary are not applied. For better literary quality at no cost, choose Google Gemini and create a free key at aistudio.google.com/apikey.</div>');
 loadAISettings();
