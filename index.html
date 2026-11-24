@@ -232,10 +232,10 @@ const PROVIDERS={free:{model:''},backend:{model:''},gemini:{model:'gemini-2.5-fl
 const STYLE_DESC={literary:'literary: preserve the author\'s voice, imagery and rhythm',natural:'natural: fluent, contemporary, easy to read',academic:'academic: precise and formal'};
 let aiAbort=false;
 const $=id=>document.getElementById(id);
-function aiSettings(){return{provider:'free',...JSON.parse(localStorage.getItem('bbs_ai_settings')||'{}')}}
+function aiSettings(){return{provider:'gemini',...JSON.parse(localStorage.getItem('bbs_ai_settings')||'{}')}}
 const needsSetup=s=>s.provider==='backend'?!s.endpoint:s.provider==='free'?false:!s.apiKey;
 function readAIForm(){let ep=$('aiEndpoint').value.trim().replace(/\/+$/,'');return{provider:$('aiProvider').value,apiKey:$('aiKey').value.trim(),model:$('aiModel').value.trim(),baseUrl:$('aiBase').value.trim().replace(/\/+$/,''),endpoint:ep,target:$('aiTarget').value,style:$('aiStyle').value,useGlossary:$('aiUseGlossary').checked,overwrite:$('aiOverwrite').checked}}
-function toggleProviderFields(){let p=$('aiProvider').value;$('aiBackendBox').hidden=p!=='backend';$('aiDirectBox').hidden=p==='backend'||p==='free';$('aiFreeHint').hidden=p!=='free';$('aiBaseWrap').hidden=p!=='openai';if(p!=='free'&&(!$('aiModel').value||Object.values(PROVIDERS).some(x=>x.model===$('aiModel').value)))$('aiModel').value=PROVIDERS[p].model}
+function toggleProviderFields(){let p=$('aiProvider').value;$('aiBackendBox').hidden=p!=='backend';$('aiDirectBox').hidden=p==='backend'||p==='free';$('aiFreeHint').hidden=p!=='free';$('aiGeminiHint').hidden=p!=='gemini';$('aiBaseWrap').hidden=p!=='openai';if(p!=='free'&&(!$('aiModel').value||Object.values(PROVIDERS).some(x=>x.model===$('aiModel').value)))$('aiModel').value=PROVIDERS[p].model}
 function loadAISettings(){let a=aiSettings();$('aiProvider').value=a.provider;$('aiKey').value=a.apiKey||'';$('aiModel').value=a.model||PROVIDERS[a.provider].model;$('aiBase').value=a.baseUrl||PROVIDERS.openai.base;$('aiEndpoint').value=a.endpoint||'';$('aiTarget').value=a.target||'Vietnamese';$('aiStyle').value=a.style||'literary';$('aiUseGlossary').checked=a.useGlossary!==false;$('aiOverwrite').checked=!!a.overwrite;toggleProviderFields()}
 function saveAISettings(){let a=readAIForm();if(a.provider==='backend'&&a.endpoint&&!/^https?:\/\//i.test(a.endpoint)){toast('Backend URL must begin with http:// or https://');return}localStorage.setItem('bbs_ai_settings',JSON.stringify(a));$('aiConnectionStatus').textContent='Settings saved. Use "Test connection" to verify.';$('aiConnectionStatus').className='connection-status';toast('AI settings saved.')}
 function glossaryPrompt(g){return g.length?'\nGlossary (always use these translations):\n'+g.map(t=>`- ${t.source} => ${t.target}${t.note?' ('+t.note+')':''}`).join('\n'):''}
@@ -308,7 +308,7 @@ const _showPage=showPage;showPage=function(p){_showPage(p);if(p==='designer')loa
 document.querySelectorAll('.nav button[data-soon]').forEach(b=>b.removeAttribute('data-soon'));
 $('aiTranslateButton').insertAdjacentHTML('afterend','<button class="btn secondary" id="aiStopButton" hidden onclick="aiAbort=true">■ Stop</button>');
 document.querySelector('#dashboard .eyebrow').textContent=new Date().toLocaleDateString('en-US',{weekday:'long'}).toUpperCase()+' · YOUR READING DESK';
-document.querySelector('.side-bottom strong').textContent='Personal workspace · v1.3';
+document.querySelector('.side-bottom strong').textContent='Personal workspace · v1.4';
 document.querySelector('#ai .status-pill').textContent='Choose a provider';
 
 /* ===== v1.1: whole-book, per-paragraph, autosave ===== */
@@ -358,6 +358,9 @@ async function myMemory(text,sl,tl){let r=await fetch('https://api.mymemory.tran
 let googleDown=false,lastEngine='Google';async function freeTranslate(p){let sl=GCODE[p.source_language]||'auto',tl=GCODE[p.target_language]||'vi',out=[];for(let c of chunkText(p.source_text,1200)){let t;try{if(googleDown)throw new Error('skip');t=await googleFree(c,sl,tl);lastEngine='Google'}catch(e){if(e.message!=='skip'){googleDown=true;lastErr='Google: '+e.message}lastEngine='MyMemory (slow, daily limit)';t=(await Promise.all(chunkText(c,450).map(x=>myMemory(x,sl,tl)))).join(' ')}out.push(t)}return out.join(' ').replace(/\s+/g,' ').trim()}
 $('aiProvider').insertAdjacentHTML('afterbegin','<option value="free">Free · Google Translate (no key)</option>');
 $('aiDirectBox').insertAdjacentHTML('beforebegin','<div class="file-hint" id="aiFreeHint">Free mode needs no account or key. Quality is “machine-translation” level (good for understanding, less literary), and style and glossary are not applied. For better literary quality at no cost, choose Google Gemini and create a free key at aistudio.google.com/apikey.</div>');
+$('aiProvider').querySelector('option[value=free]').textContent='Free · Google Translate (often blocked)';
+$('aiDirectBox').insertAdjacentHTML('afterbegin','<div class="file-hint" id="aiGeminiHint"><b>Free key in 2 minutes:</b> open aistudio.google.com/apikey, sign in with a Google account, tap “Create API key”, copy it and paste it below. No credit card needed.</div>');
+document.querySelectorAll('#ai p').forEach(p=>{if(p.textContent.includes('never asks for or stores'))p.textContent='Pick a provider and paste your key (Gemini has a free tier). The key stays in this browser and is sent only to the provider you choose.';if(p.textContent.includes('Connect your own secure translation backend'))p.textContent='Translate book passages with glossary-aware context using your own AI key.'});
 loadAISettings();
 
 </script>
